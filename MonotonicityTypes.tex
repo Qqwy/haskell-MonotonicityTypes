@@ -1,4 +1,4 @@
-% Created 2019-06-09 zo 13:04
+% Created 2019-06-09 zo 13:35
 % Intended LaTeX compiler: pdflatex
 \documentclass[11pt]{article}
 \usepackage[utf8]{inputenc}
@@ -30,7 +30,7 @@
 
 
 \section{Introduction}
-\label{sec:org07601ad}
+\label{sec:org2246baf}
 
 Dear Kevin Clancy, Heather Miller and Christopher Meiklejohn.
 
@@ -46,19 +46,14 @@ As literate haskell, this org-mode document can be read both as \LaTeX{}-PDF as 
 
 
 \section{Preamble}
-\label{sec:org183e656}
+\label{sec:orge93588e}
 As you can see, we require quite a few extensions. Why we need them will be explained when we require them.
 \begin{verbatim}
-{-# LANGUAGE
-    DataKinds,
-    TypeFamilies,
-    AllowAmbiguousTypes,
-    FlexibleContexts,
-    FlexibleInstances,
-    MultiParamTypeClasses,
-    UndecidableInstances,
-    TypeApplications
-  #-}
+{-# LANGUAGE DataKinds  #-}
+{-# LANGUAGE KindSignatures  #-}
+{-# LANGUAGE TypeFamilies  #-}
+{-# LANGUAGE PolyKinds  #-}
+{-# LANGUAGE GADTs  #-}
 
 \end{verbatim}
 
@@ -67,13 +62,14 @@ Now for the head of the module:
 \begin{verbatim}
 module MonotonicityTypes where
 
-import Control.Category hiding ((.), id)
-import Control.Arrow
-import Data.Kind (Type)
+import qualified Prelude
+import Prelude hiding (id, (.))
+import qualified Control.Category
+import qualified Control.Arrow
 \end{verbatim}
 
 \section{Building Sfuns as types that change under composition}
-\label{sec:org7591fd8}
+\label{sec:orgf41ff6d}
 Let us start by defining a datatype for the different tonicity qualifiers that we want to support.
 
 \begin{verbatim}
@@ -107,7 +103,7 @@ Normally, people will instead compose Sfuns together, which will result in an Sf
 -- The composition of two Sfuns is the composition of their two functions,
 -- but with the type restricted to the composition of their tonicity qualifiers.
 composeSfuns :: Sfun t1 b c -> Sfun t2 a b -> Sfun (ComposeTonicity t1 t2) a c
-composeSfuns (UnsafeMakeSfun f) (UnsafeMakeSfun g) = UnsafeMakeSfun (f . g)
+composeSfuns (UnsafeMakeSfun f) (UnsafeMakeSfun g) = UnsafeMakeSfun (f Prelude.. g)
 
 type family ComposeTonicity (t1 :: TonicityQualifier) (t2 :: TonicityQualifier)  :: TonicityQualifier where
   ComposeTonicity 'Monotone 'Monotone = 'Monotone
@@ -157,7 +153,88 @@ then GHC will complain with a nice error:
       result4 = composeSfuns negateSfun negateSfun
 \end{verbatim}
 
+The foundation is there. However, to make this somewhat usable, we need to make it as seamless to use Sfuns:
+To the user of the library, the fact that these functions are 'special' should mostly be hidden!
+
+It can be recognized that Sfuns are almost an instance of Arrow: The fact that the type might change under composition
+is not something that the normal Arrow typeclass can cope with.
+
+Instead, we implement an 'Indexed Category' and an 'Indexed Arrow', which explicity captures this notion of types being able to change under composition.
+
+\begin{verbatim}
+-- | Behaves to `Control.Category` but has an extra `index` kind parameter,
+-- | whose type-value might change under composition.
+class IndexedCategory (ic :: index -> * -> * -> *) where
+  type ComposeIndexes (index1 :: index) (index2 :: index) :: index -- ^ The resulting type under composition
+  id :: ic (index' :: index) a a
+  (.) :: ic i1 b c -> ic i2 a b -> ic (ComposeIndexes i1 i2) a c
+
+-- | Common composition function
+infixr 1 >>>
+(>>>) :: IndexedCategory ic => ic i1 a b -> ic i2 b c -> ic (ComposeIndexes i2 i1) a c
+a >>> b = b . a
+
+infixr 1 <<<
+(<<<) :: IndexedCategory ic => ic i1 b c -> ic i2 a b -> ic (ComposeIndexes i1 i2) a c
+(<<<) = flip (>>>)
+
+class (IndexedCategory ic) => IndexedArrow ic where
+  type DefaultIndex ic :: index
+  arr :: (index ~ DefaultIndex ic) => (a -> b) -> ic index a b
+  first :: ic index b c -> ic index (b, d) (c, d)
+
+
+\end{verbatim}
+
+These IndexedCategory and IndexedArrow typeclasses can be seen as a more general variant of the normal Category/Arrow, 
+since all normal categories/arrows can be lifted to their indexed variant by indexing them by a placeholder type like `()`.
+
+\begin{verbatim}
+-- | Wrapper to lift normal categories to 'indexed' categories.
+-- | We use the singleton kind `()` as 'index'.
+newtype FreeIndexed (c :: * -> * -> *) (single :: ()) a b = FreeIndexed { getCategory :: c a b }
+
+
+instance Control.Category.Category c => IndexedCategory (FreeIndexed c) where
+  type ComposeIndexes a b = '()
+  id = FreeIndexed Control.Category.id
+  (FreeIndexed a) . (FreeIndexed b) = FreeIndexed (a Control.Category.. b)
+
+instance Control.Arrow.Arrow c => IndexedArrow (FreeIndexed c) where
+  type DefaultIndex (FreeIndexed c) = '()
+  arr fun = FreeIndexed (Control.Arrow.arr fun)
+  first (FreeIndexed cat) = FreeIndexed (Control.Arrow.first cat)
+
+\end{verbatim}
+
+Time to implement the indexed category and indexed arrow instances for our Sfun datatype.
+
+\begin{verbatim}
+instance IndexedCategory Sfun where
+  type ComposeIndexes i1 i2 = ComposeTonicity i1 i2
+  id = UnsafeMakeSfun Prelude.id
+  f . g = composeSfuns f g
+
+instance IndexedArrow Sfun where
+  type DefaultIndex Sfun = 'Unknown
+  arr = UnsafeMakeSfun
+  first (UnsafeMakeSfun fun) = UnsafeMakeSfun (Control.Arrow.first fun)
+
+\end{verbatim}
+
+Now we're able to write the earlier compositions in a much nicer way, which feels just the same as composing normal functions:
+
+\begin{verbatim}
+-- result1' :: Num a => Sfun 'Monotone a a
+result1' = incrementSfun . incrementSfun
+\end{verbatim}
 
 \section{Handling multi-parameter functions}
-\label{sec:orgda20bb4}
+\label{sec:org838430e}
+We now can perform the composition of Sfuns. However, if we try to build an Sfun that takes more than one parameter,
+Haskell will interpret this in its usual, curried, sense, seeing it as an Sfun that takes one parameter,
+and returns a new (non-Sfun) function that takes the rest of the parameters.
+
+This is not what we want, because we want the Sfun to be qualified by the tonicity qualifiers of all of its parameter types,
+not only the first.
 \end{document}

@@ -58,8 +58,8 @@ class IndexedCategory (ic :: index -> * -> * -> *) where
   id :: ic (index' :: index) a a
   (.) :: ic i1 b c -> ic i2 a b -> ic (ComposeIndexes i1 i2) a c
 
-infixr 1 >>>
 -- | Common composition function
+infixr 1 >>>
 (>>>) :: IndexedCategory ic => ic i1 a b -> ic i2 b c -> ic (ComposeIndexes i2 i1) a c
 a >>> b = b . a
 
@@ -86,3 +86,16 @@ instance Control.Arrow.Arrow c => IndexedArrow (FreeIndexed c) where
   type DefaultIndex (FreeIndexed c) = '()
   arr fun = FreeIndexed (Control.Arrow.arr fun)
   first (FreeIndexed cat) = FreeIndexed (Control.Arrow.first cat)
+
+instance IndexedCategory Sfun where
+  type ComposeIndexes i1 i2 = ComposeTonicity i1 i2
+  id = UnsafeMakeSfun Prelude.id
+  f . g = composeSfuns f g
+
+instance IndexedArrow Sfun where
+  type DefaultIndex Sfun = 'Unknown
+  arr = UnsafeMakeSfun
+  first (UnsafeMakeSfun fun) = UnsafeMakeSfun (Control.Arrow.first fun)
+
+-- result1' :: Num a => Sfun 'Monotone a a
+result1' = incrementSfun . incrementSfun
