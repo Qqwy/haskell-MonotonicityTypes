@@ -1,4 +1,4 @@
-% Created 2019-06-09 zo 12:46
+% Created 2019-06-09 zo 13:04
 % Intended LaTeX compiler: pdflatex
 \documentclass[11pt]{article}
 \usepackage[utf8]{inputenc}
@@ -30,7 +30,7 @@
 
 
 \section{Introduction}
-\label{sec:org3a8cf0e}
+\label{sec:org07601ad}
 
 Dear Kevin Clancy, Heather Miller and Christopher Meiklejohn.
 
@@ -46,12 +46,12 @@ As literate haskell, this org-mode document can be read both as \LaTeX{}-PDF as 
 
 
 \section{Preamble}
-\label{sec:orgd8b400a}
+\label{sec:org183e656}
 As you can see, we require quite a few extensions. Why we need them will be explained when we require them.
 \begin{verbatim}
 {-# LANGUAGE
     DataKinds,
-    KindSignatures,
+    TypeFamilies,
     AllowAmbiguousTypes,
     FlexibleContexts,
     FlexibleInstances,
@@ -73,7 +73,7 @@ import Data.Kind (Type)
 \end{verbatim}
 
 \section{Building Sfuns as types that change under composition}
-\label{sec:orge15968d}
+\label{sec:org7591fd8}
 Let us start by defining a datatype for the different tonicity qualifiers that we want to support.
 
 \begin{verbatim}
@@ -89,7 +89,17 @@ newtype Sfun (t :: TonicityQualifier) input output = UnsafeMakeSfun { applySfun 
 
 Besides being restricted by `t`, Sfuns are normal functions.
 By declaring `UnsafeMakeSfun` as 'unsafe', people are discouraged from using it (but can still do so if they really know what they are doing).
-We use it to tag the primitive functions that we know are monotone (like addition) as such.
+We use it to tag the primitive functions that we know are monotone as such:
+
+\begin{verbatim}
+-- A few examples:
+incrementSfun :: Num a => Sfun 'Monotone a a
+incrementSfun = UnsafeMakeSfun (+ 1)
+
+negateSfun :: Num a => Sfun 'Antitone a a
+negateSfun = UnsafeMakeSfun (* (-1))
+
+\end{verbatim}
 
 Normally, people will instead compose Sfuns together, which will result in an Sfun type that is their composition, as per figure 6 in the paper:
 
@@ -97,23 +107,57 @@ Normally, people will instead compose Sfuns together, which will result in an Sf
 -- The composition of two Sfuns is the composition of their two functions,
 -- but with the type restricted to the composition of their tonicity qualifiers.
 composeSfuns :: Sfun t1 b c -> Sfun t2 a b -> Sfun (ComposeTonicity t1 t2) a c
-composeSfuns (UnsafeMkSfun f) (UnsafeMkSfun g) = UnsafeMkSfun (f . g)
+composeSfuns (UnsafeMakeSfun f) (UnsafeMakeSfun g) = UnsafeMakeSfun (f . g)
 
 type family ComposeTonicity (t1 :: TonicityQualifier) (t2 :: TonicityQualifier)  :: TonicityQualifier where
-  ComposeTonicity Monotone Monotone = Monotone
-  ComposeTonicity Monotone Antitone = Antitone
-  ComposeTonicity Antitone Antitone = Monotone
-  ComposeTonicity Antitone Monotone = Antitone
-  ComposeTonicity Constant other = other
-  ComposeTonicity other Constant = other
-  ComposeTonicity Discarded _ = Discarded
-  ComposeTonicity _ Discarded = Discarded
-  ComposeTonicity _ _ = Unknown
+  ComposeTonicity 'Monotone 'Monotone = 'Monotone
+  ComposeTonicity 'Monotone 'Antitone = 'Antitone
+  ComposeTonicity 'Antitone 'Antitone = 'Monotone
+  ComposeTonicity 'Antitone 'Monotone = 'Antitone
+  ComposeTonicity 'Constant other = other
+  ComposeTonicity other 'Constant = other
+  ComposeTonicity 'Discarded _ = 'Discarded
+  ComposeTonicity _ 'Discarded = 'Discarded
+  ComposeTonicity _ _ = 'Unknown
 
 \end{verbatim}
 
+Now that we have defined composition, we can compose our sfuns as follows:
+
+\begin{verbatim}
+-- result1 :: Num a => Sfun 'Monotone a a
+result1 = composeSfuns incrementSfun incrementSfun
+
+-- result2 :: Num a => Sfun 'Antitone a a
+result2 = composeSfuns negateSfun incrementSfun
+
+-- result3 :: Num a => Sfun 'Antitone a a
+result3 = composeSfuns incrementSfun negateSfun
+
+-- result4 :: Num a => Sfun 'Monotone a a
+result4 = composeSfuns negateSfun negateSfun
+
+\end{verbatim}
+
+Those type signatures are inferred. If you were to try for instance to write
+
+\begin{verbatim}
+result4' :: Num a => Sfun 'Antitone a a
+result4' = composeSfuns negateSfun negateSfun
+\end{verbatim}
+
+then GHC will complain with a nice error:
+
+\begin{verbatim}
+• Couldn't match type ‘'Monotone’ with ‘'Antitone’
+  Expected type: Sfun 'Antitone a a
+    Actual type: Sfun (ComposeTonicity 'Antitone 'Antitone) a a
+• In the expression: composeSfuns negateSfun negateSfun
+  In an equation for ‘result4’:
+      result4 = composeSfuns negateSfun negateSfun
+\end{verbatim}
 
 
 \section{Handling multi-parameter functions}
-\label{sec:orga50398a}
+\label{sec:orgda20bb4}
 \end{document}
