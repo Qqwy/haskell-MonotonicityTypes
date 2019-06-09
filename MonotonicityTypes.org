@@ -1,0 +1,97 @@
+#+AUTHOR: Wiebe-Marten Wijnja
+#+PROPERTY: header-args :comment org
+
+* Introduction
+
+Dear Kevin Clancy, Heather Miller and Christopher Meiklejohn.
+
+I very much enjoyed reading your whitepaper titled *Monotonicity Types*.
+While reading I more and more got the suspicion that it might be possible to implement the essence of Monotonicity Types today in Haskell,
+foregoing the need to build a completely separate language and compiler to annotate functions as monotonic, antitonic or neither.
+
+This turned out to be a bit of a challenge, and I learned a lot about the dependently typed features that Haskell (provided you enable some GHC extensions) offers.
+I believe the end result to be usable/practical today.
+
+In this literate haskell document, I'll explain the implementation details.
+As literate haskell, this org-mode document can be read both as LaTeX-PDF as well as Haskell source code.
+
+
+* Preamble
+:PROPERTIES:
+:header-args: :tangle MonotonicityTypes.hs
+:END:
+
+As you can see, we require quite a few extensions. Why we need them will be explained when we require them.
+#+BEGIN_SRC haskell
+{-# LANGUAGE
+    DataKinds,
+    KindSignatures,
+    AllowAmbiguousTypes,
+    FlexibleContexts,
+    FlexibleInstances,
+    MultiParamTypeClasses,
+    UndecidableInstances,
+    TypeApplications
+  #-}
+
+#+END_SRC
+
+Now for the head of the module:
+
+#+BEGIN_SRC haskell
+module MonotonicityTypes where
+
+import Control.Category hiding ((.), id)
+import Control.Arrow
+import Data.Kind (Type)
+#+END_SRC
+
+* Building Sfuns as types that change under composition
+:PROPERTIES:
+:header-args: :tangle MonotonicityTypes.hs
+:END:
+
+Let us start by defining a datatype for the different tonicity qualifiers that we want to support.
+
+#+BEGIN_SRC haskell
+{-| Tonicity Qualifiers from section 4.2 of the paper.-}
+data TonicityQualifier = Constant | Monotone | Antitone | Unknown | Discarded
+#+END_SRC
+
+But rather than using these as values, we will use them at the type level, restricting the type of *Sfuns*:
+
+#+BEGIN_SRC haskell
+newtype Sfun (t :: TonicityQualifier) input output = UnsafeMakeSfun { applySfun :: input -> output }
+#+END_SRC
+
+Besides being restricted by `t`, Sfuns are normal functions.
+By declaring `UnsafeMakeSfun` as 'unsafe', people are discouraged from using it (but can still do so if they really know what they are doing).
+We use it to tag the primitive functions that we know are monotone (like addition) as such.
+
+Normally, people will instead compose Sfuns together, which will result in an Sfun type that is their composition, as per figure 6 in the paper:
+
+#+BEGIN_SRC haskell
+-- The composition of two Sfuns is the composition of their two functions,
+-- but with the type restricted to the composition of their tonicity qualifiers.
+composeSfuns :: Sfun t1 b c -> Sfun t2 a b -> Sfun (ComposeTonicity t1 t2) a c
+composeSfuns (UnsafeMakeSfun f) (UnsafeMakeSfun g) = UnsafeMakeSfun (f . g)
+
+type family ComposeTonicity (t1 :: TonicityQualifier) (t2 :: TonicityQualifier)  :: TonicityQualifier where
+  ComposeTonicity Monotone Monotone = Monotone
+  ComposeTonicity Monotone Antitone = Antitone
+  ComposeTonicity Antitone Antitone = Monotone
+  ComposeTonicity Antitone Monotone = Antitone
+  ComposeTonicity Constant other = other
+  ComposeTonicity other Constant = other
+  ComposeTonicity Discarded _ = Discarded
+  ComposeTonicity _ Discarded = Discarded
+  ComposeTonicity _ _ = Unknown
+
+#+END_SRC
+
+
+
+* Handling multi-parameter functions
+:PROPERTIES:
+:header-args: :tangle MonotonicityTypes.hs
+:END:

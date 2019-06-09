@@ -1,0 +1,119 @@
+% Created 2019-06-09 zo 12:46
+% Intended LaTeX compiler: pdflatex
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{grffile}
+\usepackage{longtable}
+\usepackage{wrapfig}
+\usepackage{rotating}
+\usepackage[normalem]{ulem}
+\usepackage{amsmath}
+\usepackage{textcomp}
+\usepackage{amssymb}
+\usepackage{capt-of}
+\usepackage{hyperref}
+\author{Wiebe-Marten Wijnja}
+\date{\today}
+\title{}
+\hypersetup{
+ pdfauthor={Wiebe-Marten Wijnja},
+ pdftitle={},
+ pdfkeywords={},
+ pdfsubject={},
+ pdfcreator={Emacs 26.2 (Org mode 9.2.2)}, 
+ pdflang={English}}
+\begin{document}
+
+\tableofcontents
+
+
+\section{Introduction}
+\label{sec:org3a8cf0e}
+
+Dear Kevin Clancy, Heather Miller and Christopher Meiklejohn.
+
+I very much enjoyed reading your whitepaper titled \textbf{Monotonicity Types}.
+While reading I more and more got the suspicion that it might be possible to implement the essence of Monotonicity Types today in Haskell,
+foregoing the need to build a completely separate language and compiler to annotate functions as monotonic, antitonic or neither.
+
+This turned out to be a bit of a challenge, and I learned a lot about the dependently typed features that Haskell (provided you enable some GHC extensions) offers.
+I believe the end result to be usable/practical today.
+
+In this literate haskell document, I'll explain the implementation details.
+As literate haskell, this org-mode document can be read both as \LaTeX{}-PDF as well as Haskell source code.
+
+
+\section{Preamble}
+\label{sec:orgd8b400a}
+As you can see, we require quite a few extensions. Why we need them will be explained when we require them.
+\begin{verbatim}
+{-# LANGUAGE
+    DataKinds,
+    KindSignatures,
+    AllowAmbiguousTypes,
+    FlexibleContexts,
+    FlexibleInstances,
+    MultiParamTypeClasses,
+    UndecidableInstances,
+    TypeApplications
+  #-}
+
+\end{verbatim}
+
+Now for the head of the module:
+
+\begin{verbatim}
+module MonotonicityTypes where
+
+import Control.Category hiding ((.), id)
+import Control.Arrow
+import Data.Kind (Type)
+\end{verbatim}
+
+\section{Building Sfuns as types that change under composition}
+\label{sec:orge15968d}
+Let us start by defining a datatype for the different tonicity qualifiers that we want to support.
+
+\begin{verbatim}
+{-| Tonicity Qualifiers from section 4.2 of the paper.-}
+data TonicityQualifier = Constant | Monotone | Antitone | Unknown | Discarded
+\end{verbatim}
+
+But rather than using these as values, we will use them at the type level, restricting the type of \textbf{Sfuns}:
+
+\begin{verbatim}
+newtype Sfun (t :: TonicityQualifier) input output = UnsafeMakeSfun { applySfun :: input -> output }
+\end{verbatim}
+
+Besides being restricted by `t`, Sfuns are normal functions.
+By declaring `UnsafeMakeSfun` as 'unsafe', people are discouraged from using it (but can still do so if they really know what they are doing).
+We use it to tag the primitive functions that we know are monotone (like addition) as such.
+
+Normally, people will instead compose Sfuns together, which will result in an Sfun type that is their composition, as per figure 6 in the paper:
+
+\begin{verbatim}
+-- The composition of two Sfuns is the composition of their two functions,
+-- but with the type restricted to the composition of their tonicity qualifiers.
+composeSfuns :: Sfun t1 b c -> Sfun t2 a b -> Sfun (ComposeTonicity t1 t2) a c
+composeSfuns (UnsafeMkSfun f) (UnsafeMkSfun g) = UnsafeMkSfun (f . g)
+
+type family ComposeTonicity (t1 :: TonicityQualifier) (t2 :: TonicityQualifier)  :: TonicityQualifier where
+  ComposeTonicity Monotone Monotone = Monotone
+  ComposeTonicity Monotone Antitone = Antitone
+  ComposeTonicity Antitone Antitone = Monotone
+  ComposeTonicity Antitone Monotone = Antitone
+  ComposeTonicity Constant other = other
+  ComposeTonicity other Constant = other
+  ComposeTonicity Discarded _ = Discarded
+  ComposeTonicity _ Discarded = Discarded
+  ComposeTonicity _ _ = Unknown
+
+\end{verbatim}
+
+
+
+\section{Handling multi-parameter functions}
+\label{sec:orga50398a}
+\end{document}
